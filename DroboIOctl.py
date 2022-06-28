@@ -1,3 +1,4 @@
+
 """
 copyright:
 Drobo Utils Copyright (C) 2008,2009  Peter Silva (Peter.A.Silva@gmail.com)
@@ -10,13 +11,13 @@ from fcntl import ioctl
 import Drobo
 import struct
 
-
 def hexdump(label, data):
     i = 0
     print(("%s %03x:" % (label, i)))
     for bb in data:
         if type(bb) is bytes:
             bb = ord(bb)
+
         print("%02x" % int(bb), end=' ')
         i = i + 1
         if (i % 16) == 0:
@@ -65,6 +66,7 @@ class sg_io_hdr(Structure):
         ("duration", c_uint),
         ("info", c_uint)
     ]
+
 
     def __init__(self):
         self.interface_id = ord('S')
@@ -147,7 +149,9 @@ class DroboIOctl:
         hoho = self.get_sub_page(hoholen, mcb, 0, self.debug)
         (dunno1, vendor, product) = struct.unpack(fmt, hoho)
 
+        #return ( host, channel, id, lun, vendor )
         return (host, channel, id, lun, vendor.decode())
+
 
     def get_sub_page(self, sz, mcb, out, DEBUG):
         """
@@ -274,7 +278,6 @@ class DroboIOctl:
 
 import os
 
-
 def drobolunlist(debugflags=0, vendor="Drobo"):
     """
       return a list of attached Drobo devices, like so
@@ -312,6 +315,7 @@ def drobolunlist(debugflags=0, vendor="Drobo"):
             except:
                 if debugflags & Drobo.DBG_Detection:
                     print("rejected: failed to identify LUN")
+
                 pdio.closefd()
                 continue
 
@@ -319,11 +323,18 @@ def drobolunlist(debugflags=0, vendor="Drobo"):
                 print("id: ", id)
 
             thisdev = "%02d%02d%02d" % (id[0], id[1], id[2])
+
+            #vendor=id[4].lower()
+            #if ( vendor.startswith("trusted") or \
+            #     vendor.startswith("drobo") ):  # you have a Drobo!
+            #     if debugflags & Drobo.DBG_Detection:
+            #        print "found a Drobo"
             if ( id[4].lower().startswith("trusted") or \
                  id[4].lower().startswith("drobo") or \
                  id[4].lower().startswith(vendor.lower()) ):  # you have a Drobo!
                 if debugflags & Drobo.DBG_Detection:
                     print("found a Drobo")
+
                 if thisdev == previousdev:  # multi-lun drobo...
                     if debugflags & Drobo.DBG_Detection:
                         print("appending to lundevs...")
@@ -334,7 +345,6 @@ def drobolunlist(debugflags=0, vendor="Drobo"):
                     if debugflags & Drobo.DBG_Detection:
                         print("appending new lundevs to devices:", devices)
                     lundevs = [dev_file]
-
             else:
                 if debugflags & Drobo.DBG_Detection:
                     print("rejected: vendor is %s (not from DRI)" % id[4])
@@ -349,15 +359,13 @@ def drobolunlist(debugflags=0, vendor="Drobo"):
         print("returning list: ", devices)
     return devices
 
-
 # unit testing...
 if __name__ == "__main__":
     import struct  # only for unit testing...
     valid_device = "/dev/sdg"
     #valid mcb: 5a 00 3a 01 00 00 00 00 14 00
 
-    valid_mcb = struct.pack(">BBBBBBBBBB", 0x5a, 0, 0x3a, 1, 0, 0, 0, 0, 0x14,
-                            0)
+    valid_mcb = struct.pack(">BBBBBBBBBB", 0x5a, 0, 0x3a, 1, 0, 0, 0, 0, 0x14, 0)
     dmp = DroboIOctl(valid_device)
     print("version", dmp.version())
     print("identifyLUN", dmp.identifyLUN())

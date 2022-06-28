@@ -39,6 +39,7 @@ MAX_TRANSACTION = 250
 # obviously need to update this with every release.
 VERSION = '9999'
 
+
 # set to non-zero to increase verbosity of library functions.
 DEBUG = 0
 # It's a bit field,
@@ -214,19 +215,25 @@ def _unitfeatures(norig):
          of course, do not know what they are...
     """
     n = norig
-    feature_map = [(0x0001, 'NO_AUTO_REBOOT'), (0x0002, 'NO_FAT32_FORMAT'),
+    feature_map = [(0x0001, 'NO_AUTO_REBOOT'), 
+                   (0x0002, 'NO_FAT32_FORMAT'),
                    (0x0004, 'USED_CAPACITY_FROM_HOST'),
-                   (0x0008, 'DISKPACKSTATUS'), (0x0010, 'ENCRYPT_NOHEADER'),
+                   (0x0008, 'DISKPACKSTATUS'),
+                   (0x0010, 'ENCRYPT_NOHEADER'),
                    (0x0020, 'CMD_STATUS_QUERIABLE'),
                    (0x0040, 'VARIABLE_LUN_SIZE_1_16'),
                    (0x0080, 'PARTITION_LUN_GPT_MBR'),
                    (0x0100, 'FAT32_FORMAT_VOLNAME'),
                    (0x0200, 'SUPPORTS_DROBOSHARE'),
                    (0x0400, 'SUPPORTS_NEW_LUNINFO2'),
-                   (0x0800, 'feature x0800'), (0x1000, 'LUN_MANAGEMENT'),
-                   (0x2000, 'feature x2000'), (0x4000, 'SUPPORTS_OPTIONS2'),
-                   (0x8000, 'SUPPORTS_SHUTDOWN'), (0x10000, 'feature x10000'),
-                   (0x20000, 'SUPPORTS_ISCSI'), (0x40000, 'feature x40000'),
+                   (0x0800, 'feature x0800'),
+                   (0x1000, 'LUN_MANAGEMENT'),
+                   (0x2000, 'feature x2000'), 
+                   (0x4000, 'SUPPORTS_OPTIONS2'),
+                   (0x8000, 'SUPPORTS_SHUTDOWN'), 
+                   (0x10000, 'feature x10000'),
+                   (0x20000, 'SUPPORTS_ISCSI'), 
+                   (0x40000, 'feature x40000'),
                    (0x80000, 'feature x80000'),
                    (0x40000000, 'SUPPORTS_VOLUME_RENAME'),
                    (0x80000000, 'SUPPORTS_SINGLE_LUN_FORMAT')]
@@ -271,7 +278,6 @@ class Drobo:
         global DEBUG
 
         DEBUG = debugflags
-
         if DEBUG & DBG_Instantiation:
             print('__init__ ')
 
@@ -352,6 +358,7 @@ class Drobo:
             self.fd.closefd()
 
         self.fd = None
+
 
     def format_script(self, fstype='ext3'):
         """ return a shell script giving the code to commands required to 
@@ -465,7 +472,6 @@ class Drobo:
             print('expected %d, got %d bytes' % (len(cmdout), paklen))
             raise DroboException("cmdout is unexpected length")
 
-
 #    print 'Pack: ' + mypack
 
         result = struct.unpack(mypack, cmdout)
@@ -483,6 +489,7 @@ class Drobo:
         if (self.transactionID > MAX_TRANSACTION):
             self.transactionID = 0
         self.transactionID = self.transactionID + 1
+
 
     def __issueCommand(self, command):
         """ issue a command to a Drobo...
@@ -597,6 +604,7 @@ class Drobo:
 
         return
 
+
     def SetLunSize(self, tb):
         """
        SetLunSize - Sets the maximum LUN size to 'tb' terabytes
@@ -709,6 +717,9 @@ class Drobo:
         key = ord(data[0]) ^ 0x2d
         datam = ''.join([chr(ord(x) ^ key) for x in data])
         return datam
+        #key = ord(data[0]) ^ 0x2d
+        #datam = ''.join(map( lambda x: chr(ord(x)^key), data ))
+        #return datam
 
     #
     # constants for use with firmware operations
@@ -719,6 +730,7 @@ class Drobo:
 
     def localFirmwareRepository(self):
         return Drobo.localfwrepository
+
 
     def PickFirmware(self, name):
         """
@@ -769,7 +781,10 @@ class Drobo:
             28-31  dev. type params.
 
     """
-        dpropack = '>BBBBBBBB8s16s4s'
+        #OLDER drobos (i.e. Elite)
+        #dpropack = '>BBBBBBBB8s16s4s'
+        #NEWER drobos (i.e. b810i)
+        dpropack = ''
         mypack = dpropack + '20sBB8HH'
         paklen = struct.calcsize(mypack)
 
@@ -842,7 +857,6 @@ class Drobo:
             if k[2] == "licensed":
                 k = k[0:2] + k[3:]
                 #print k
-
             # these If's are now nested for ease of debugging, insert a print to taste...
             # the algorithm is wrong wrt, other platforms...
             if k[2] == "firmware":
@@ -934,9 +948,11 @@ class Drobo:
         # http://bugs.python.org/issue1202
         # doesn't work on 64 bit, only on 32bit... weird...
         blank = struct.pack('i', 0)
+
         hdrcrc = zlib.crc32(self.fwdata[0:308] + blank +
                             self.fwdata[312:self.fwhdr[0]]) & 0xffffffff
         r = self.fwhdr[11] & 0xffffffff
+
 
         if (DEBUG & DBG_Chatty):
             print(
@@ -945,8 +961,10 @@ class Drobo:
         if r != hdrcrc:
             print('file corrupt, header checksum wrong')
             return 0
+
         bodycrc = zlib.crc32(self.fwdata[self.fwhdr[0]:]) & 0xffffffff
         q = self.fwhdr[9] & 0xffffffff
+
 
         if (DEBUG & DBG_Chatty):
             print('CRC for body from header: %d, calculated: %d ' %
@@ -977,6 +995,7 @@ class Drobo:
       STATUS: working.
 
     """
+
         (fwarch, fwversion, hwlevel, fwpath) = self.PickLatestFirmware()
         if fwarch == '':  # already at latest version...
             return 0
@@ -1147,13 +1166,17 @@ class Drobo:
         #
         while (j < self.slot_count):
             i = j * 8
+
             s = (r[i + 2], r[i + 3], r[i + 4], _ledstatus(r[i + 5]),
+                 #r[i + 6].strip(" \0"),
+                 #r[i + 7].strip(" \0"))
                  r[i + 6].decode().strip(" \0"),
                  r[i + 7].decode().strip(" \0"))
             l.append(s)
             j = j + 1
 
         return l
+
 
     def GetSubPageLUNs(self):
         """
@@ -1228,6 +1251,7 @@ class Drobo:
             return (1220112079, 8, 'TRUSTED DATA')
 
         (utc, offset, name) = self.__getsubpage(0x05, 'LH32s')
+        #name = name.strip(" \0")
         name = name.decode().strip(" \0")
         offset = 8  # offset is screwed up returned by Drobo, just set it to what they claim it should be.
         return (utc, offset, name)
@@ -1275,10 +1299,13 @@ class Drobo:
                      'ArmMarvell', '1.1.2', self.features )
             return self.fw
 
+        # OLDER DROBO?
         raw = self.__getsubpage(0x08, 'BBHBB32s16s16s240s')
         result = struct.unpack('>112sL32sH90s', raw[8])
         self.features = _unitfeatures(result[1])
         self.fw = (raw[0], raw[1], raw[2], raw[3], raw[4],
+                   #raw[5].strip(" \0"), raw[6].strip(" \0"),
+                   #raw[7].strip(" \0"), self.features )
                    raw[5].decode().strip(" \0"), raw[6].decode().strip(" \0"),
                    raw[7].decode().strip(" \0"), self.features)
         return self.fw
@@ -1378,23 +1405,17 @@ class Drobo:
                         ipa = socket.ntohl(rawipa)
                         maska = socket.ntohl(rawnma)
                         gwa = socket.ntohl(rawgwa)
-                        d['IPAddress'] = socket.inet_ntoa(struct.pack(
-                            'I', ipa))
-                        d['NetMask'] = socket.inet_ntoa(struct.pack(
-                            'I', maska))
+                        d['IPAddress'] = socket.inet_ntoa(struct.pack('I', ipa))
+                        d['NetMask'] = socket.inet_ntoa(struct.pack('I', maska))
                         d['Gateway'] = socket.inet_ntoa(struct.pack('I', gwa))
                         d['MTU'] = mtua
-                        d['IPAddress2'] = socket.inet_ntoa(
-                            struct.pack('I', ipb))
-                        d['NetMask2'] = socket.inet_ntoa(
-                            struct.pack('I', maskb))
+                        d['IPAddress2'] = socket.inet_ntoa(struct.pack('I', ipb))
+                        d['NetMask2'] = socket.inet_ntoa(struct.pack('I', maskb))
                         d['Gateway2'] = socket.inet_ntoa(struct.pack('I', gwb))
                         d['MTU2'] = mtub
                     else:
-                        d['IPAddress'] = socket.inet_ntoa(struct.pack(
-                            'I', ipb))
-                        d['NetMask'] = socket.inet_ntoa(struct.pack(
-                            'I', maskb))
+                        d['IPAddress'] = socket.inet_ntoa(struct.pack('I', ipb))
+                        d['NetMask'] = socket.inet_ntoa(struct.pack('I', maskb))
                         d['Gateway'] = socket.inet_ntoa(struct.pack('I', gwb))
             return d
         else:
@@ -1437,7 +1458,6 @@ class Drobo:
                     filesystems.append(fields[1])
         mounts.close()
         return filesystems
-
 
 def DiscoverLUNs(debugflags=0, vendorstring="Drobo"):
     """ find all Drobo LUNs accessible to this user on this system. 

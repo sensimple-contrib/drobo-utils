@@ -6,6 +6,7 @@ Drobo Utils comes with ABSOLUTELY NO WARRANTY; For details type see the file
 named COPYING in the root of the source directory tree.
 """
 
+
 import sys
 import Drobo
 import DroboIOctl
@@ -173,8 +174,10 @@ def printscsi(d):
     print("SCSI emulation information:")
     s = d.inquiry
     if Drobo.DEBUG & Drobo.DBG_Chatty:
-        print("Vendor: %-8s  Model: %15s Revision: %s" %
-              (s[8].decode(), s[9].decode(), s[10].decode()))
+        # OLD DROBO NEEDS DECODE
+        #print("Vendor: %-8s  Model: %15s Revision: %s" % (s[8].decode(), s[9].decode(), s[10].decode()))
+        # NEW DROBO returns  AttributeError: 'int' object has no attribute 'decode'
+        print("Vendor: %-8s  Model: %15s Revision: %s" % (s[8], s[9], s[10]))
     else:
         print(str((s[8], s[9], s[10])))
     for c in d.char_devs:
@@ -267,8 +270,8 @@ def setlunsize(d, newlunsize, confirmation):
   '''
     lunsize = int(newlunsize)
 
-    if lunsize not in (1, 2, 4, 8, 16):
-        print('lun size needs to be 1, 2, 4, 8, or 16 TiB; %d is invalid' %
+    if lunsize not in (1, 2, 4, 8, 16, 32, 64):
+        print('lun size needs to be 1, 2, 4, 8, 16, 32, or 64 TiB; %d is invalid' %
               lunsize)
         sys.exit()
 
@@ -366,6 +369,8 @@ if device != None and not match:
 if cmd == 'list':
     print(' '.join([':'.join(x) for x in l]))
     sys.exit()
+    #print ' '.join(map(lambda x: ':'.join(x) , l ))
+    #sys.exit()
 
 if debug & Drobo.DBG_Detection:
     print("found ", l)
