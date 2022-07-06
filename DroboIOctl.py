@@ -128,17 +128,19 @@ class DroboIOctl:
         SCSI_IOCTL_GET_IDLUN = 0x5382
         SCSI_IOCTL_GET_BUS_NUMBER = 0x5386
 
-        fmt = ">bbbbl"
+        if self.debug & Drobo.DBG_HWDialog:
+            print("-- DroboIOctl.identifyLUN()")
+
+        fmt = ">BBBBL"
         idlun = create_string_buffer(struct.calcsize(fmt))
         i = ioctl(self.sg_fd, SCSI_IOCTL_GET_IDLUN, idlun, True)
+
         if i < 0:
             print("Drobo get_mode_page SG_IO ioctl error")
             return None
 
         (channel, lun, id, host, host_unique_id) = struct.unpack(fmt, idlun)
-
-        #print "%s: scsi%d channel=%d id=%d lun=%d" % ( self.char_dev_file, host, \
-        #      channel, id, lun )
+        #print(struct.unpack(fmt, idlun))
 
         #bog standard inquiry mcb
         fmt = "8s8s16s"
@@ -148,9 +150,13 @@ class DroboIOctl:
         # len ought to be 96
         hoho = self.get_sub_page(hoholen, mcb, 0, self.debug)
         (dunno1, vendor, product) = struct.unpack(fmt, hoho)
-
+        
+        #print(hoholen)
+        if self.debug & Drobo.DBG_HWDialog:
+            print(" %s: scsi%d channel=%d id=%d lun=%d; vendor=%s; product=%s; dunno1=%s; host_unique_id=%s;" % ( self.char_dev_file, host, channel, id, lun, vendor.decode(), product.decode(), dunno1.decode(), host_unique_id ))
+            print("--/ DroboIOctl.identifyLUN()")
         #return ( host, channel, id, lun, vendor )
-        return (host, channel, id, lun, vendor.decode())
+        return (host, channel, id, lun, vendor.decode(), product.decode(), host_unique_id)
 
 
     def get_sub_page(self, sz, mcb, out, DEBUG):
@@ -174,7 +180,9 @@ class DroboIOctl:
             io_hdr.dxfer_direction = sg_io_hdr.SG_DXFER_FROM_DEV
 
         if self.debug & Drobo.DBG_HWDialog:
+            print("/=======================\\")
             hexdump("mcb", mcb)
+            print("\=======================/")
 
         io_hdr.cmd_len = len(mcb)
         io_hdr.cmdp = mcb
@@ -189,12 +197,12 @@ class DroboIOctl:
         io_hdr.dxferp = cast(page_buffer, c_char_p)
 
         if self.debug & Drobo.DBG_HWDialog:
-            print("4 before ioctl, sense_buffer_len=", io_hdr.mx_sb_len)
+            print(" 4 before ioctl, sense_buffer_len=", io_hdr.mx_sb_len)
 
         i = ioctl(self.sg_fd, sg_io_hdr.SG_IO, io_hdr, True)
 
         if self.debug & Drobo.DBG_HWDialog:
-            print("5 after ioctl, result=%d status: %d driver_status: %d host_status: %d sb_len_wr: %d resid: %d" % \
+            print(" 5 after ioctl, result=%d status: %d driver_status: %d host_status: %d sb_len_wr: %d resid: %d" % \
                ( i, io_hdr.status, io_hdr.driver_status, \
                   io_hdr.host_status, io_hdr.sb_len_wr, io_hdr.resid ))
 
@@ -210,7 +218,9 @@ class DroboIOctl:
             retsz = sz
 
         if self.debug & Drobo.DBG_HWDialog:
+            print('/=======================\\')
             hexdump("page_buffer", page_buffer)
+            print("\=======================/")
             print("the length is: ", retsz)
         return page_buffer[0:retsz]
 
@@ -276,88 +286,7 @@ class DroboIOctl:
         return size
 
 
-import os
 
-def drobolunlist(debugflags=0, vendor="Drobo"):
-    """
-      return a list of attached Drobo devices, like so
-
-       [ [lun0, lun1, lun2], [lun0, lun1, lun2] ]
-
-      inspired by sg_scan.c (part of sg3_utils), sample output line:
-        /dev/sdh: scsi41 channel=0 id=0 lun=0 [em]
-        TRUSTED   Mass Storage      1.00 [rmb=0 cmdq=0 pqual=0 pdev=0x0]
-
-      whose logic is encapsulated in the idenfityLUN call.
-    """
-
-    devdir = "/dev"
-    devices = []
-    lundevs = []
-    previousdev = ""
-    p = os.listdir(devdir)
-    p.sort()  # to ensure luns in ascending order.
-
-    for potential in p:
-        if potential.startswith("sd") and len(potential) == 3:
-            dev_file = devdir + '/' + potential
-            try:
-                if debugflags & Drobo.DBG_Detection:
-                    print("examining: ", dev_file)
-                pdio = DroboIOctl(dev_file)
-            except:
-                if debugflags & Drobo.DBG_Detection:
-                    print("rejected: failed to construct LUN pdio")
-                continue
-
-            try:
-                id = pdio.identifyLUN()
-            except:
-                if debugflags & Drobo.DBG_Detection:
-                    print("rejected: failed to identify LUN")
-
-                pdio.closefd()
-                continue
-
-            if debugflags & Drobo.DBG_Detection:
-                print("id: ", id)
-
-            thisdev = "%02d%02d%02d" % (id[0], id[1], id[2])
-
-            #vendor=id[4].lower()
-            #if ( vendor.startswith("trusted") or \
-            #     vendor.startswith("drobo") ):  # you have a Drobo!
-            #     if debugflags & Drobo.DBG_Detection:
-            #        print "found a Drobo"
-            if ( id[4].lower().startswith("trusted") or \
-                 id[4].lower().startswith("drobo") or \
-                 id[4].lower().startswith(vendor.lower()) ):  # you have a Drobo!
-                if debugflags & Drobo.DBG_Detection:
-                    print("found a Drobo")
-
-                if thisdev == previousdev:  # multi-lun drobo...
-                    if debugflags & Drobo.DBG_Detection:
-                        print("appending to lundevs...")
-                    lundevs.append(dev_file)
-                else:
-                    if lundevs != []:
-                        devices.append(lundevs)
-                    if debugflags & Drobo.DBG_Detection:
-                        print("appending new lundevs to devices:", devices)
-                    lundevs = [dev_file]
-            else:
-                if debugflags & Drobo.DBG_Detection:
-                    print("rejected: vendor is %s (not from DRI)" % id[4])
-
-            previousdev = thisdev
-            pdio.closefd()
-
-    if lundevs != []:
-        devices.append(lundevs)
-
-    if debugflags & Drobo.DBG_Detection:
-        print("returning list: ", devices)
-    return devices
 
 # unit testing...
 if __name__ == "__main__":
@@ -381,4 +310,4 @@ if __name__ == "__main__":
     dmp.closefd()
 
     print('hunt...')
-    print(drobolunlist())
+    print(Drobo.drobolunlist())

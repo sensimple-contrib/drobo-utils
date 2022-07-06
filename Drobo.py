@@ -22,7 +22,7 @@ named COPYING in the root of the source directory tree.
 """
 
 import fcntl, struct, socket, array, subprocess, time
-import os, sys, re
+import os, sys, stat, re, fnmatch
 import types
 
 #only for fw download...
@@ -43,18 +43,18 @@ VERSION = '9999'
 # set to non-zero to increase verbosity of library functions.
 DEBUG = 0
 # It's a bit field,
-DBG_Chatty = 0x01
-DBG_HWDialog = 0x02
-DBG_Instantiation = 0x04
-DBG_RawReturn = 0x08
-DBG_Detection = 0x10
-DBG_General = 0x20
+DBG_Chatty = 0x01 #1  - General
+DBG_HWDialog = 0x02 #2  - Hardware Dialog
+DBG_Instantiation = 0x04 #4  - Initiation
+DBG_RawReturn = 0x08 #8  - Raw returned records from DMIP queries
+DBG_Detection = 0x10 #16 - Detection
+DBG_General = 0x20 #63 - All of the above
 
 # This isn't entirely simulation mode.  It is to aid development
 # when no drobo is available.  You can format random disks, including
 # non-drobos.  So do not activate unless you read what the code does first.
 # in simulation mode, can run non-root, best for GUI work.
-DBG_Simulation = 0x80
+DBG_Simulation = 0x80 #128- Simulate presence of Drobo for testing
 
 #for generic SCSI IO details...
 import DroboIOctl
@@ -271,17 +271,26 @@ class Drobo:
          - in settings, the 32 byte name starts with a null byte before 
             'TRUSTED DATA', is that normal?
   """
-    def __init__(self, chardevs, debugflags=0):
+
+    
+
+    def __init__(self, chardevs, debugflags=0, vendor='', dpropack=''):
         """ chardev is /dev/sdX... 
          the character device associated with the drobo unit
      """
         global DEBUG
 
+        self.fd = None
+        self.vendor = vendor
+        self.dpropack = dpropack
+
         DEBUG = debugflags
         if DEBUG & DBG_Instantiation:
             print('__init__ ')
+            print(chardevs, debugflags, self.vendor, self.dpropack)
 
-        self.fd = None
+        
+        
 
         if type(chardevs) is list:
             self.char_dev_file = chardevs[0]
@@ -296,7 +305,7 @@ class Drobo:
         self.relaystart = 0
 
         if DEBUG & DBG_Simulation:
-            self.GetSubPageFirmware() \
+            self.GetSubPage_Firmware()
             #for the side effect, self.fw & self.features get set
 
         else:
@@ -307,10 +316,8 @@ class Drobo:
             # more thorough checks for Drobohood...
             # for some reason under ubuntu intrepid, start getting responses of all bits set.
             # need some ways to spot a real drobo.
-            cfg = self.GetSubPageConfig()
+            cfg = self.GetSubPage_Config()
             #Side effect: Config, sets self.slot_count...
-
-            self.inquiry = self.inquire()
 
             if DEBUG & DBG_Detection:
                 print("cfg: ", cfg)
@@ -321,6 +328,10 @@ class Drobo:
                           (self.char_dev_file, len(cfg)))
                 raise DroboException
 
+
+            self.inquiry = self.inquire()
+
+            
             if (self.slot_count < 4):
                 if DEBUG & DBG_Detection:
                     print(
@@ -328,11 +339,11 @@ class Drobo:
                         % (self.char_dev_file, cfg[0]))
                 raise DroboException  # Assert: All Drobo have 4 slots.
 
-            set = self.GetSubPageSettings()
+            set = self.GetSubPage_Settings()
             if DEBUG & DBG_Detection:
                 print("settings: ", set)
 
-            self.GetSubPageFirmware()
+            self.GetSubPage_Firmware()
             if (len(self.fw) < 8) and (len(self.fw[7]) < 5):
                 if DEBUG & DBG_Detection:
                     print("%s length of fw query: is %d, should be < 8." %
@@ -350,7 +361,6 @@ class Drobo:
             #    raise DroboException
 
     def __del__(self):
-
         if DEBUG & DBG_Instantiation:
             print('__del__ ')
 
@@ -358,6 +368,177 @@ class Drobo:
             self.fd.closefd()
 
         self.fd = None
+
+
+
+
+    def inquire(self):
+        """ 
+     issue a standard SCSI INQUIRY command, return standard response as tuple.
+
+     STATUS: works.
+
+     trying to understand how to send an INQUIRY:
+     SCSI version 2 protocol  INQUIRY...
+     protocol : T10/1236-D Revision 20
+
+     byte:  0 - descriptor code.                0x12 -- INQUIRY
+            1 - 00 peripheral dev. type code    0x0, 4, 5, 7, e .. 
+            2 - reserved
+            3 - reserved.
+            4-27   target descriptor parameters.
+                 0 - target descriptor type code: 0x04 - Identification.
+
+            28-31  dev. type params.
+
+    """
+        if DEBUG & DBG_HWDialog:
+            print('-- Drobo.inquire()')
+
+        #OLDER drobos (i.e. Elite)
+        #dpropack = '>BBBBBBBB8s16s4s'
+        #NEWER drobos (i.e. b810i)
+        #if not self.dpropack:
+        #    self.dpropack = '>BBBBBBBB8s16s4s'
+
+        pfmt = '20sBB8HH'
+        pfmtlen = struct.calcsize(pfmt)
+
+        propak = self.dpropack
+        propaklen = struct.calcsize(propak)
+
+        mypack = self.dpropack # + pfmt
+        mypaklen = struct.calcsize(mypack)
+
+
+        if DEBUG & DBG_HWDialog:
+            print("inquire response unpack format string: %s" % (mypack))
+
+        modepageblock = struct.pack("BBBBBB", 0x12, 0, 0, 0, mypaklen, 0)
+
+        cmdout = self.fd.get_sub_page(mypaklen, modepageblock, 0, DEBUG)
+        if (len(cmdout) == mypaklen): #expecting 76 bytes 
+            ret = struct.unpack(mypack, cmdout)
+        else:
+            if (len(cmdout) == 36 or len(cmdout) == 60):  # 36 bytes, we have a PRO...
+                ret = struct.unpack(propak, cmdout)
+                print("PRO detected; response length: ", len(cmdout))
+            #elif (len(cmdout) == 60): #60 bytes newer device
+            #    ret = struct.unpack(propak, cmdout)
+
+            else:
+                print(
+                    'error: scsi inquire returned %d, bytes instead of %d expected.'
+                    % (len(cmdout), mypaklen))
+                raise DroboException
+        if DEBUG & DBG_RawReturn:
+            print("inquiry response: ", str(ret), "inquiry response length: ", len(cmdout))
+        
+        if DEBUG & DBG_HWDialog:
+            print('--/ Drobo.inquire()')
+        return ret
+
+    
+
+
+    def __getsubpage(self, sub_page, pack):
+        """Retrieve Sub page from drobo block device.
+       Uses DroboIOctl class to run the raw ioctl.
+
+       sub_page: selection code from DMP Spec...
+       pack: the pattern of fields in the subpage...
+
+       returns: a list unpacked according to the  structure 
+
+       Each sub_page has a standard header:
+           pack is prepended with a standard header '>BBH'
+       Drobo is bigendian.
+       first byte has some flags and a vendor code.
+       second byte is the sub-page code.
+       following two bytes have the length of the record (max: 65535)
+    """
+        if DEBUG & DBG_HWDialog:
+            print('getsubpage')
+
+        if DEBUG & DBG_Simulation:
+            return ()
+
+        mypack = '>BBH' + pack
+        paklen = struct.calcsize(mypack)
+        if DEBUG & DBG_RawReturn:
+            print('DMIP sub_page query:0x%02x pattern: %s ' %
+                  (sub_page, mypack))
+
+        modepageblock = struct.pack(">BBBBBBBHB", 0x5a, 0, 0x3a, sub_page, 0,
+                                    0, 0, paklen, 0)
+
+        cmdout = self.fd.get_sub_page(paklen, modepageblock, 0, DEBUG)
+
+        if len(cmdout) != paklen:
+            print('expected %d, got %d bytes' % (len(cmdout), paklen))
+            raise DroboException("cmdout is unexpected length")
+
+#    print 'Pack: ' + mypack
+
+        result = struct.unpack(mypack, cmdout)
+        if DEBUG & DBG_HWDialog:
+            print('4 byte returned sense buffer header: 0x%x, 0x%x, 0x%x' %
+                  result[:3])
+        if DEBUG & DBG_RawReturn:
+            print('DMIP response sub_page:0x%02x returned: %s ' %
+                  (sub_page, str(result[3:])))
+        return result[3:]
+
+    def __transactionNext(self):
+        """ Increment the transaction member for some modeSelect pages.
+    """
+        if (self.transactionID > MAX_TRANSACTION):
+            self.transactionID = 0
+        self.transactionID = self.transactionID + 1
+
+
+
+
+
+
+    def __issueCommand(self, command):
+        """ issue a command to a Drobo...
+     0x06 - blink.
+     0x0d - Standby
+
+     returns nothing, look at the drobo to see if it worked.
+     note: command is asynchronous, returns before operation is complete.
+    """
+
+        if DEBUG & DBG_HWDialog:
+            print('issuecommand...')
+
+        if DEBUG & DBG_Simulation:
+            self.__transactionNext()
+            return
+
+        modepageblock = struct.pack(">BBBBBBBHB", 0xea, 0x10, 0x00, command,
+                                    0x00, self.transactionID, 0x01 << 5, 0x01,
+                                    0x00)
+
+        try:
+            cmdout = self.fd.get_sub_page(1, modepageblock, 1, DEBUG)
+
+        except:
+            print(
+                'IF you see, "bad address", it is because you need to be the super user...'
+            )
+            print(" try sudo or su ...       ")
+            sys.exit()
+
+        self.__transactionNext()
+
+        if (len(cmdout) != 1):
+            raise DroboException
+        # only way to verify success is to look at the Drobo...
+
+
+
 
 
     def format_script(self, fstype='ext3'):
@@ -435,97 +616,9 @@ class Drobo:
 
         return format_script
 
-    def __getsubpage(self, sub_page, pack):
-        """Retrieve Sub page from drobo block device.
-       Uses DroboIOctl class to run the raw ioctl.
-
-       sub_page: selection code from DMP Spec...
-       pack: the pattern of fields in the subpage...
-
-       returns: a list unpacked according to the  structure 
-
-       Each sub_page has a standard header:
-           pack is prepended with a standard header '>BBH'
-       Drobo is bigendian.
-       first byte has some flags and a vendor code.
-       second byte is the sub-page code.
-       following two bytes have the length of the record (max: 65535)
-    """
-        if DEBUG & DBG_HWDialog:
-            print('getsubpage')
-
-        if DEBUG & DBG_Simulation:
-            return ()
-
-        mypack = '>BBH' + pack
-        paklen = struct.calcsize(mypack)
-        if DEBUG & DBG_RawReturn:
-            print('DMIP sub_page query:0x%02x pattern: %s ' %
-                  (sub_page, mypack))
-
-        modepageblock = struct.pack(">BBBBBBBHB", 0x5a, 0, 0x3a, sub_page, 0,
-                                    0, 0, paklen, 0)
-
-        cmdout = self.fd.get_sub_page(paklen, modepageblock, 0, DEBUG)
-
-        if len(cmdout) != paklen:
-            print('expected %d, got %d bytes' % (len(cmdout), paklen))
-            raise DroboException("cmdout is unexpected length")
-
-#    print 'Pack: ' + mypack
-
-        result = struct.unpack(mypack, cmdout)
-        if DEBUG & DBG_HWDialog:
-            print('4 byte returned sense buffer header: 0x%x, 0x%x, 0x%x' %
-                  result[:3])
-        if DEBUG & DBG_RawReturn:
-            print('DMIP response sub_page:0x%02x returned: %s ' %
-                  (sub_page, str(result[3:])))
-        return result[3:]
-
-    def __transactionNext(self):
-        """ Increment the transaction member for some modeSelect pages.
-    """
-        if (self.transactionID > MAX_TRANSACTION):
-            self.transactionID = 0
-        self.transactionID = self.transactionID + 1
 
 
-    def __issueCommand(self, command):
-        """ issue a command to a Drobo...
-     0x06 - blink.
-     0x0d - Standby
 
-     returns nothing, look at the drobo to see if it worked.
-     note: command is asynchronous, returns before operation is complete.
-    """
-
-        if DEBUG & DBG_HWDialog:
-            print('issuecommand...')
-
-        if DEBUG & DBG_Simulation:
-            self.__transactionNext()
-            return
-
-        modepageblock = struct.pack(">BBBBBBBHB", 0xea, 0x10, 0x00, command,
-                                    0x00, self.transactionID, 0x01 << 5, 0x01,
-                                    0x00)
-
-        try:
-            cmdout = self.fd.get_sub_page(1, modepageblock, 1, DEBUG)
-
-        except:
-            print(
-                'IF you see, "bad address", it is because you need to be the super user...'
-            )
-            print(" try sudo or su ...       ")
-            sys.exit()
-
-        self.__transactionNext()
-
-        if (len(cmdout) != 1):
-            raise DroboException
-        # only way to verify success is to look at the Drobo...
 
     def Sync(self, NewName=None):
         """  Set the Drobo's current time to the host's time,
@@ -543,7 +636,7 @@ class Drobo:
         payload = "LH32s"
         payloadlen = struct.calcsize(payload)
         if NewName == None:
-            NewName = self.GetSubPageSettings()[2]
+            NewName = self.GetSubPage_Settings()[2]
 
         buffer = struct.pack(">BBH" + payload, 0x7a, 0x05, payloadlen, now, 0,
                              NewName)
@@ -553,6 +646,9 @@ class Drobo:
         modepageblock = struct.pack(">BBBBBBBHB", 0x55, 0x01, 0x7a, 0x05, 0, 0,
                                     0, sblen, 0)
         self.fd.put_sub_page(modepageblock, buffer, DEBUG)
+
+
+
 
     def SetOptions(self, options):
         """ Set Options.
@@ -603,6 +699,9 @@ class Drobo:
             self.fd.put_sub_page(modepageblock, buffer, DEBUG)
 
         return
+
+
+
 
 
     def SetLunSize(self, tb):
@@ -760,50 +859,6 @@ class Drobo:
 
         good = self.validateFirmware()
         return good
-
-    def inquire(self):
-        """ 
-     issue a standard SCSI INQUIRY command, return standard response as tuple.
-
-     STATUS: works.
-
-     trying to understand how to send an INQUIRY:
-     SCSI version 2 protocol  INQUIRY...
-     protocol : T10/1236-D Revision 20
-
-     byte:  0 - descriptor code.                0x12 -- INQUIRY
-            1 - 00 peripheral dev. type code    0x0, 4, 5, 7, e .. 
-            2 - reserved
-            3 - reserved.
-            4-27   target descriptor parameters.
-                 0 - target descriptor type code: 0x04 - Identification.
-
-            28-31  dev. type params.
-
-    """
-        #OLDER drobos (i.e. Elite)
-        #dpropack = '>BBBBBBBB8s16s4s'
-        #NEWER drobos (i.e. b810i)
-        dpropack = ''
-        mypack = dpropack + '20sBB8HH'
-        paklen = struct.calcsize(mypack)
-
-        modepageblock = struct.pack("BBBBBB", 0x12, 0, 0, 0, paklen, 0)
-
-        cmdout = self.fd.get_sub_page(paklen, modepageblock, 0, DEBUG)
-        if (len(cmdout) == paklen):
-            ret = struct.unpack(mypack, cmdout)
-        else:
-            if (len(cmdout) == 36):  # we have a PRO...
-                ret = struct.unpack(dpropack, cmdout)
-            else:
-                print(
-                    'warning: scsi inquire returned %d, bytes instead of %d expected.'
-                    % (len(cmdout), paklen))
-                raise DroboException
-        if DEBUG & DBG_RawReturn:
-            print("inquiry response: ", str(ret))
-        return ret
 
     def PickLatestFirmware(self):
         """
@@ -1101,10 +1156,18 @@ class Drobo:
         if DEBUG & DBG_General:
             print('Drobo thinks write status is: ', status[0])
 
+
+
+
+
+
+
+
+
     def GetCharDev(self):
         return self.char_dev_file
 
-    def GetSubPageConfig(self):
+    def GetSubPage_Config(self):
         """ returns: ( MaxNumberOfSlots, MaxNumLUNS, MaxLunSize )
      """
         # SlotCount, Reserved, MaxLuns, MaxLunSz, Reserved, unused, unused
@@ -1117,7 +1180,7 @@ class Drobo:
         self.slot_count = result[0]
         return (result[0], result[2], result[3] * 512)
 
-    def GetSubPageCapacity(self):
+    def GetSubPage_Capacity(self):
         """ returns: ( Free, Used, Virtual, Unprotected ) 
      """
         if DEBUG & DBG_Simulation:
@@ -1127,7 +1190,7 @@ class Drobo:
 
         return self.__getsubpage(0x02, 'QQQQ')
 
-    def GetSubPageSlotInfo(self):
+    def GetSubPage_SlotInfo(self):
         """  returns list of slot info, each slot is:
        ( slotId, PhysicalCapacity, ManagedCapacity, leds, Manufacturer, Model ) ... )
        
@@ -1178,7 +1241,7 @@ class Drobo:
         return l
 
 
-    def GetSubPageLUNs(self):
+    def GetSubPage_LUNs(self):
         """
          For each LUN, returns detailed information tuple:
             [ ( LUNID, LUN total Capacity, LUN Used Capacity, PartitionScheme*, Format* ),
@@ -1231,7 +1294,7 @@ class Drobo:
 
         return li
 
-    def GetSubPageSettings(self):
+    def GetSubPage_Settings(self):
         """
         returns: ( currentUTCtime, UTCoffset, DroboName )
 
@@ -1256,7 +1319,7 @@ class Drobo:
         offset = 8  # offset is screwed up returned by Drobo, just set it to what they claim it should be.
         return (utc, offset, name)
 
-    def GetSubPageProtocol(self):
+    def GetSubPage_Protocol(self):
         """ 
         returns ( Major, Minor )
 
@@ -1271,7 +1334,7 @@ class Drobo:
 
         return self.__getsubpage(0x06, 'BB')
 
-    def GetSubPageFirmware(self):
+    def GetSubPage_Firmware(self):
         """
 
         STATUS:  working with ERRATA:
@@ -1310,7 +1373,7 @@ class Drobo:
                    raw[7].decode().strip(" \0"), self.features)
         return self.fw
 
-    def GetSubPageStatus(self):
+    def GetSubPage_Status(self):
         """
      return _unitstatus
 
@@ -1459,7 +1522,117 @@ class Drobo:
         mounts.close()
         return filesystems
 
-def DiscoverLUNs(debugflags=0, vendorstring="Drobo"):
+
+
+
+def drobolunlist(debugflags = 0, device_path = None, vendor_string='', dpropack_string=''):
+    """
+      return a list of attached Drobo devices identified BY VENDOR, like so
+
+       [ [lun0, lun1, lun2], [lun0, lun1, lun2] ]
+
+      inspired by sg_scan.c (part of sg3_utils), sample output line:
+        /dev/sdh: scsi41 channel=0 id=0 lun=0 [em]
+        TRUSTED   Mass Storage      1.00 [rmb=0 cmdq=0 pqual=0 pdev=0x0]
+
+      whose logic is encapsulated in the idenfityLUN call.
+    """
+    vendorstring = vendor_string.lower()
+    dpropackstring = dpropack_string
+
+    devdir = "/dev"
+    devpfx = "sd"
+    devices = []
+    lundevs = []
+    previousdev = ""
+
+    #if specified a specific device_path and exists and is block special
+    if device_path and (os.path.exists(device_path) and stat.S_ISBLK(os.stat(device_path).st_mode)):
+        p = [device_path] #cast to list so we don't iterate over chars
+    else: #get device files
+        p = os.listdir(devdir)
+        p = fnmatch.filter(p, devpfx + '?')
+        p = [devdir + '/' + d for d in p] # rebuild device file paths with list comprehension
+        p.sort()  # to ensure luns in ascending order.
+
+
+    if debugflags & DBG_Detection:
+        print("\n-- drobolunlist()")
+        print(" Scanning device file(s): %s\n vendorstring='%s'" % (p, vendorstring))
+
+    for potential in p:
+        dev_file = potential
+
+        if debugflags & DBG_Detection:
+            print("\n examining: ", dev_file)
+
+        # sanity check the potential device file before moving forward
+        if not (os.path.exists(dev_file) and stat.S_ISBLK(os.stat(dev_file).st_mode)):
+            if debugflags & DBG_Detection:
+                print(" error: invalid device file '%s'" % dev_file)
+        
+        #Query the device SCSI identity
+        #1: create control ioctl object for device file 
+        try:
+            pdio = DroboIOctl.DroboIOctl(dev_file, 0, debugflags)
+        except:
+            if debugflags & DBG_Detection:
+                print(" error: failed to construct LUN pdio")
+                print(sys.exc_info())
+            continue
+        #2: get identity details for device
+        try:
+            id = pdio.identifyLUN()
+        except:
+            if debugflags & DBG_Detection:
+                print(" error: failed to identify LUN")
+
+            pdio.closefd()
+            continue
+
+        if debugflags & DBG_Detection:
+            print(" id: ", id)
+
+        thisdev = "%02d:%02d:%02d" % (id[0], id[1], id[2])
+        device_vendor = id[4].lower().strip()
+        
+        #MATCHING THE VENDOR STRING WITH THE DEVICE'S VENDOR
+        if (device_vendor.startswith(vendorstring)):  # you have a Drobo!
+            if debugflags & DBG_Detection:
+                print(" MATCH ['%s']: '%s'" % (vendorstring,device_vendor ))
+
+            if thisdev == previousdev:  # multi-lun drobo-- BROKEN ON MULTIPATH/NEWER, all get a new channel and no other ids...
+                if debugflags & DBG_Detection:
+                    print(" appending related device '%s'[%s] to LUN host scsi%d list..." % (dev_file, thisdev, id[0]))
+                lundevs.append(dev_file)
+            else:
+                if lundevs != []:
+                    devices.append(lundevs)
+                if debugflags & DBG_Detection:
+                    print(" appending device '%s'[%s] as distinct LUN host scsi%d..." % (dev_file, thisdev, id[0])) #, devices)
+                lundevs = [dev_file]
+        else:
+            if debugflags & DBG_Detection:
+                print(" REJECTED['%s'] %s[%s]: vendor is '%s'" % (vendorstring,dev_file,thisdev,device_vendor))
+
+        previousdev = thisdev
+        pdio.closefd()
+
+    if lundevs != []:
+        devices.append(lundevs)
+
+    if debugflags & DBG_Detection:
+        print("\nVendor matched devices: ", devices)
+        print("--/ drobolunlist()\n")
+    return devices
+
+
+
+
+
+
+
+def DiscoverLUNs(debugflags=0, device_path=None, vendor='', dpropack=''):
     """ find all Drobo LUNs accessible to this user on this system. 
         returns a list of list of character device files 
               samples: [ [ "/dev/sdf", "/dev/sdg" ], [ "/dev/sdh" ] ] 
@@ -1469,19 +1642,25 @@ def DiscoverLUNs(debugflags=0, vendorstring="Drobo"):
     global DEBUG
     DEBUG = debugflags
 
+    if (DEBUG & DBG_Detection):
+        print("\n-- DiscoverLUNs()")
+
     if DEBUG & DBG_Simulation:
         return [["/dev/sdx", "/dev/sdy"], ["/dev/sdz"]]
 
     devices = []
 
-    for potential in DroboIOctl.drobolunlist(DEBUG, vendorstring):
+    for potential in drobolunlist(DEBUG, device_path, vendor, dpropack):
         if (DEBUG & DBG_Detection):
             print("trying: ", potential)
 
         try:
-            d = Drobo(potential, DEBUG)
+            d = Drobo(potential, DEBUG, vendor, dpropack)
             devices.append(potential)
         except:
             pass
+
+    if (DEBUG & DBG_Detection):
+        print("--/ DiscoverLUNs()\n")
 
     return devices
